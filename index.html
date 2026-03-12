@@ -1203,23 +1203,10 @@
 
                 composer.addPass( new OutputPass() );
 
-                // ==== РАЗМЕЩЕНИЕ ОБЪЕКТОВ НА СЦЕНЕ
-
-                // ==== КОЛЛАЙДЕРЫ
-
                 // ==== ЛОКАЦИЯ
 
                 const locationImport = game.instantiateImportedScene(game.storage.assets.location, physicsWorld);
-                if (locationImport.colliders.length === 0) {
-                    console.warn('No collider meshes found in location scene. Falling back to legacy fixed colliders.');
-                    game.createFixedCollider(physicsWorld, 0, 0, 0, 10, 0, 10);
-                    game.createFixedCollider(physicsWorld, -1.4, 2, -2.21, 3, 2, 0);
-                    game.createFixedCollider(physicsWorld, 0, 2, -5.89, 4, 2, 0);
-                    game.createFixedCollider(physicsWorld, -3.7, 2, -5.89, 0, 2, 4);
-                    game.createFixedCollider(physicsWorld, 3.4, 2, -2, 0, 2, 4);
-                    game.createFixedCollider(physicsWorld, 3.6, 2, -4.85, 0.9, 2, 0.8);
-                    game.createFixedCollider(physicsWorld, -3, 2, -2.85, 0.6, 2, 0.6);
-                }
+
                 scene.add(locationImport.scene);
 
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(-3.1, 0, -2.85).setRotation(0, Math.PI/2, 0).getObject());
