@@ -630,6 +630,14 @@
                     const geometry = new THREE.ConeGeometry(r, halfHeight * 2, 16);
                     mesh = new THREE.Mesh(geometry, this.colliderMaterial.clone());
                 }
+                else if (type === RAPIER.ShapeType.TriMesh) {
+                    const vertices = collider.vertices();
+                    const indices = collider.indices();
+                    const geometry = new THREE.BufferGeometry();
+                    geometry.setAttribute('position', new THREE.BufferAttribute(vertices, 3));
+                    geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+                    mesh = new THREE.Mesh(geometry, this.colliderMaterial.clone());
+                }
 
                 return mesh;
             }
@@ -860,11 +868,86 @@
                 object.receiveShadow = true;
             }
 
+            isColliderMesh(object) {
+                return Boolean(
+                    object?.isMesh &&
+                    typeof object.name === 'string' &&
+                    object.name.toLowerCase().startsWith('col_')
+                );
+            }
+
+            prepareImportedScene(scene) {
+                scene.traverse((node) => {
+                    if (!node.isMesh) {
+                        return;
+                    }
+
+                    if (this.isColliderMesh(node)) {
+                        node.visible = false;
+                        return;
+                    }
+
+                    this.applyDefaultObjectShadowSettings(node);
+                });
+            }
+
             createFixedCollider(physcisWorld, x, y, z, w, h, d) {
                 const bodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z);
                 const colliderDesc = RAPIER.ColliderDesc.cuboid(w, h, d);
                 const body = physcisWorld.createRigidBody(bodyDesc);
                 physcisWorld.createCollider(colliderDesc, body);
+            }
+
+            createFixedCollidersFromObject(physicsWorld, object, flags = undefined) {
+                const colliders = [];
+                const colliderFlags = flags ?? RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES ?? 0;
+                // матрица это position + scale + rotation типа, хз как работает, но надо это принять
+                // обновляет объект и всех потомков вниз
+                object.updateMatrixWorld(true);
+
+                object.traverse((child) => {
+                    if (!this.isColliderMesh(child)) {
+                        return;
+                    }
+
+                    // обновляет родителей вверх и сам объект, но не детей вниз
+                    child.updateWorldMatrix(true, false);
+
+                    let geometry = child.geometry;
+                    // Если геометрия без индексов, разворачиваем её в неиндексированный вид
+                    if (!geometry.index) {
+                        geometry = geometry.toNonIndexed();
+                    } else {
+                        geometry = geometry.clone();
+                    }
+
+                    // Применяем мировую матрицу меша к вершинам, переводя их в координаты мира
+                    geometry.applyMatrix4(child.matrixWorld);
+
+                    const positionAttribute = geometry.getAttribute('position');
+
+                    const vertices = Float32Array.from(positionAttribute.array);
+
+                    const indices = geometry.index
+                        ? Uint32Array.from(geometry.index.array)
+                        // дрисло если нету индексов, то есть по порядку связать это дерьмо
+                        : Uint32Array.from({ length: positionAttribute.count }, (_, index) => index);
+
+                    const bodyDesc = RAPIER.RigidBodyDesc.fixed();
+                    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices, colliderFlags);
+                    const body = physicsWorld.createRigidBody(bodyDesc);
+                    colliders.push(physicsWorld.createCollider(colliderDesc, body));
+
+                    geometry.dispose();
+                });
+
+                return colliders;
+            }
+
+            instantiateImportedScene(asset, physicsWorld, flags = undefined) {
+                const scene = asset.scene.clone(true);
+                const colliders = this.createFixedCollidersFromObject(physicsWorld, scene, flags);
+                return { scene, colliders };
             }
 
             createPlayerBody(physicsWorld, playerRadius, playerHeight, x, y, z) {
@@ -1063,10 +1146,7 @@
                                 break;
                             case 1: // GLTFLoader
                                 new GLTFLoader(manager).load(BASEURL + assetdata.path, data => {
-                                    data.scene.traverse((node) => {
-                                        if (node.isMesh)
-                                            game.applyDefaultObjectShadowSettings(node);
-                                    });
+                                    game.prepareImportedScene(data.scene);
                                     game.storage.assets[key] = data;
                                 });
                                 break;
@@ -1126,17 +1206,21 @@
                 // ==== РАЗМЕЩЕНИЕ ОБЪЕКТОВ НА СЦЕНЕ
 
                 // ==== КОЛЛАЙДЕРЫ
-                game.createFixedCollider(physicsWorld, 0, 0, 0, 10, 0, 10);
-                game.createFixedCollider(physicsWorld, -1.4, 2, -2.21, 3, 2, 0);
-                game.createFixedCollider(physicsWorld, 0, 2, -5.89, 4, 2, 0);
-                game.createFixedCollider(physicsWorld, -3.7, 2, -5.89, 0, 2, 4);
-                game.createFixedCollider(physicsWorld, 3.4, 2, -2, 0, 2, 4);
-                game.createFixedCollider(physicsWorld, 3.6, 2, -4.85, 0.9, 2, 0.8);
-                game.createFixedCollider(physicsWorld, -3, 2, -2.85, 0.6, 2, 0.6);
 
                 // ==== ЛОКАЦИЯ
 
-                scene.add(game.storage.assets.location.scene);
+                const locationImport = game.instantiateImportedScene(game.storage.assets.location, physicsWorld);
+                if (locationImport.colliders.length === 0) {
+                    console.warn('No collider meshes found in location scene. Falling back to legacy fixed colliders.');
+                    game.createFixedCollider(physicsWorld, 0, 0, 0, 10, 0, 10);
+                    game.createFixedCollider(physicsWorld, -1.4, 2, -2.21, 3, 2, 0);
+                    game.createFixedCollider(physicsWorld, 0, 2, -5.89, 4, 2, 0);
+                    game.createFixedCollider(physicsWorld, -3.7, 2, -5.89, 0, 2, 4);
+                    game.createFixedCollider(physicsWorld, 3.4, 2, -2, 0, 2, 4);
+                    game.createFixedCollider(physicsWorld, 3.6, 2, -4.85, 0.9, 2, 0.8);
+                    game.createFixedCollider(physicsWorld, -3, 2, -2.85, 0.6, 2, 0.6);
+                }
+                scene.add(locationImport.scene);
 
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(-3.1, 0, -2.85).setRotation(0, Math.PI/2, 0).getObject());
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(2.7, 0, 5.8).setRotation(0, Math.PI, 0).getObject());
