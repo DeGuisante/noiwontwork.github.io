@@ -694,6 +694,7 @@
                 this.currentPhysicsWorld = undefined;
                 this.currentCamera = undefined;
                 this.currentComposer = undefined;
+                this.currentSceneDestroy = undefined;
 
                 this.currentUpdate = undefined;
                 this.currentPhysicsUpdate = undefined;
@@ -752,20 +753,37 @@
                 }
             }
 
-            generateScene(name) {
+            destroyCurrentScene() {
+                this.currentSceneDestroy?.(this);
+                this.currentSceneDestroy = undefined;
+
+                this.currentComposer?.dispose?.();
+                this.currentPhysicsWorld?.free?.();
+
+                this.currentScene = undefined;
+                this.currentPhysicsWorld = undefined;
+                this.currentCamera = undefined;
+                this.currentComposer = undefined;
+                this.currentUpdate = undefined;
+                this.currentPhysicsUpdate = undefined;
+            }
+
+            generateScene(name, sceneArguments) {
                 const generator = this.sceneGenerators[name];
                 if (generator) {
                     this.debug.reset();
+                    this.destroyCurrentScene();
 
                     this.renderer.toneMapping = THREE.NoToneMapping;
                     this.linkedObjectsAndRigidBodies = [];
 
-                    const sceneData = generator(this);
+                    const sceneData = generator(this, sceneArguments);
 
                     this.currentScene = sceneData.scene;
                     this.currentPhysicsWorld = sceneData.physicsWorld;
                     this.currentCamera = sceneData.camera;
                     this.currentComposer = sceneData.composer;
+                    this.currentSceneDestroy = sceneData.destroy;
 
                     this.currentUpdate = sceneData.update;
                     this.currentPhysicsUpdate = sceneData.physicsUpdate;
@@ -776,7 +794,7 @@
                     this.#updateEventHandler(window, 'resize', 'currentResize', sceneData.resize);
 
                     this.currentResize?.();
-                    sceneData.ready?.(this);
+                    sceneData.ready?.(this, sceneArguments);
                 }
             }
 
@@ -977,133 +995,6 @@
         (async () => {
             await game.init();
 
-            // тестовая сцена со всеми типами коллайдеров
-            game.addSceneGenerator("test", (game) => {
-                game.clearUI();
-                game.clearBackgroundUI();
-
-                const scene = new THREE.Scene();
-                scene.background = new THREE.Color(0x111122);
-
-                const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 1000);
-                camera.position.set(8, 6, 12);
-                camera.lookAt(0, 3, 0);
-
-                const ambientLight = new THREE.AmbientLight(0x404060);
-                scene.add(ambientLight);
-                const dirLight = new THREE.DirectionalLight(0xffffff, 1);
-                dirLight.position.set(2, 8, 4);
-                scene.add(dirLight);
-                const fillLight = new THREE.PointLight(0x446688, 0.5);
-                fillLight.position.set(-3, 5, 5);
-                scene.add(fillLight);
-
-                const gridHelper = new THREE.GridHelper(20, 20, 0x888888, 0x444444);
-                scene.add(gridHelper);
-
-                const gravity = { x: 0.0, y: -9.81, z: 0.0 };
-                const physicsWorld = new RAPIER.World(gravity);
-
-                const groundSize = 20.0;
-                const groundHeight = 0.5;
-                const groundBodyDesc = RAPIER.RigidBodyDesc.fixed().setTranslation(0.0, -groundHeight/2, 0.0);
-                const groundBody = physicsWorld.createRigidBody(groundBodyDesc);
-                const groundColliderDesc = RAPIER.ColliderDesc.cuboid(groundSize/2, groundHeight/2, groundSize/2);
-                physicsWorld.createCollider(groundColliderDesc, groundBody);
-
-                const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x336633 });
-                const groundMesh = new THREE.Mesh(
-                    new THREE.BoxGeometry(groundSize, groundHeight, groundSize),
-                    groundMaterial
-                );
-                groundMesh.position.set(0, -groundHeight/2, 0);
-                scene.add(groundMesh);
-
-                function createPhysicalObject(type, pos, color, sizeParams) {
-                    let bodyDesc, colliderDesc, mesh;
-                    
-                    switch (type) {
-                        case 'cuboid':
-                            bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z);
-                            colliderDesc = RAPIER.ColliderDesc.cuboid(sizeParams.w/2, sizeParams.h/2, sizeParams.d/2).setDensity(1.0);
-                            mesh = new THREE.Mesh(new THREE.BoxGeometry(sizeParams.w, sizeParams.h, sizeParams.d), new THREE.MeshStandardMaterial({ color }));
-                            break;
-                        case 'ball':
-                            bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z);
-                            colliderDesc = RAPIER.ColliderDesc.ball(sizeParams.r).setDensity(1.0);
-                            mesh = new THREE.Mesh(new THREE.SphereGeometry(sizeParams.r, 32, 16), new THREE.MeshStandardMaterial({ color }));
-                            break;
-                        case 'capsule':
-                            bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z);
-                            colliderDesc = RAPIER.ColliderDesc.capsule(sizeParams.halfHeight, sizeParams.r).setDensity(1.0);
-                            const group = new THREE.Group();
-                            const cylGeo = new THREE.CylinderGeometry(sizeParams.r, sizeParams.r, sizeParams.halfHeight*2, 16);
-                            const cylMat = new THREE.MeshStandardMaterial({ color });
-                            const cylinder = new THREE.Mesh(cylGeo, cylMat);
-                            cylinder.position.y = 0;
-                            group.add(cylinder);
-                            const sphereGeo = new THREE.SphereGeometry(sizeParams.r, 16, 16);
-                            const sphereMat = new THREE.MeshStandardMaterial({ color });
-                            const topSphere = new THREE.Mesh(sphereGeo, sphereMat);
-                            topSphere.position.y = sizeParams.halfHeight;
-                            group.add(topSphere);
-                            const bottomSphere = new THREE.Mesh(sphereGeo, sphereMat.clone());
-                            bottomSphere.position.y = -sizeParams.halfHeight;
-                            group.add(bottomSphere);
-                            mesh = group;
-                            break;
-                        case 'cylinder':
-                            bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z);
-                            colliderDesc = RAPIER.ColliderDesc.cylinder(sizeParams.halfHeight, sizeParams.r).setDensity(1.0);
-                            mesh = new THREE.Mesh(new THREE.CylinderGeometry(sizeParams.r, sizeParams.r, sizeParams.halfHeight*2, 16), new THREE.MeshStandardMaterial({ color }));
-                            break;
-                        case 'cone':
-                            bodyDesc = RAPIER.RigidBodyDesc.dynamic().setTranslation(pos.x, pos.y, pos.z);
-                            colliderDesc = RAPIER.ColliderDesc.cone(sizeParams.halfHeight, sizeParams.r).setDensity(1.0);
-                            mesh = new THREE.Mesh(new THREE.ConeGeometry(sizeParams.r, sizeParams.halfHeight*2, 16), new THREE.MeshStandardMaterial({ color }));
-                            break;
-                        default:
-                            return null;
-                    }
-
-                    const body = physicsWorld.createRigidBody(bodyDesc);
-                    physicsWorld.createCollider(colliderDesc, body);
-                    
-                    mesh.position.copy(pos);
-                    scene.add(mesh);
-                    game.addLinkedObject(mesh, body);
-                }
-
-                createPhysicalObject('cuboid', new THREE.Vector3(-6, 4, 0), 0xff5555, { w: 1.2, h: 1.2, d: 1.2 });
-                createPhysicalObject('ball', new THREE.Vector3(-3, 5, 1), 0x55ff55, { r: 0.8 });
-                createPhysicalObject('capsule', new THREE.Vector3(0, 6, -1), 0x5555ff, { halfHeight: 0.8, r: 0.5 });
-                createPhysicalObject('cylinder', new THREE.Vector3(3, 4, 1), 0xffaa00, { halfHeight: 0.8, r: 0.6 });
-                createPhysicalObject('cone', new THREE.Vector3(6, 5, -1), 0xaa44ff, { halfHeight: 1.0, r: 0.7 });
-
-                createPhysicalObject('cuboid', new THREE.Vector3(-5, 2, 3), 0xff8888, { w: 0.8, h: 0.8, d: 0.8 });
-                createPhysicalObject('ball', new THREE.Vector3(-2, 3, 4), 0x88ff88, { r: 0.6 });
-                createPhysicalObject('capsule', new THREE.Vector3(2, 4, 3), 0x8888ff, { halfHeight: 0.6, r: 0.4 });
-                createPhysicalObject('cylinder', new THREE.Vector3(5, 3, 4), 0xffcc88, { halfHeight: 0.6, r: 0.5 });
-                createPhysicalObject('cone', new THREE.Vector3(7, 4, 2), 0xcc88ff, { halfHeight: 0.8, r: 0.5 });
-
-                const physicsUpdate = (game, delta) => {
-                    game.syncLinkedObjects();
-                };
-
-                const resize = (game) => {
-                    game.cameraResize();
-                    game.renderResize();
-                };
-
-                return {
-                    scene,
-                    camera,
-                    physicsWorld,
-                    physicsUpdate,
-                    resize
-                };
-            });
-
             game.addSceneGenerator("loadingscreen", /** @param {DobrodzeyEngine} game */ (game) => {
                 game.clearUI();
                 game.clearBackgroundUI();
@@ -1169,17 +1060,30 @@
                 return {};
             });
 
-            game.addSceneGenerator("maingame", /** @param {DobrodzeyEngine} game */ (game) => {
+            class MainGame {
+                input = {
+                    forward: false,
+                    backward: false,
+                    left: false,
+                    right: false
+                };
+
+                dust = undefined;
+                controls = undefined;
+                dustSettings = undefined;
+                sceneArguments = undefined;
+            }
+
+            game.addSceneGenerator("maingame", /** @param {DobrodzeyEngine} game */ (game, sceneArguments) => {
                 game.clearUI();
                 game.clearBackgroundUI();
 
                 game.renderer.toneMapping = THREE.ReinhardToneMapping;
 
-                game.storage.maingame ??= {};
-                game.storage.maingame.input ??= {};
-                game.storage.maingame.effects ??= {};
-                game.storage.maingame.ispaused = false;
-                game.storage.maingame.isactuallypaused = false;
+                game.storage.maingame ??= new MainGame();
+                /** @type {MainGame} */
+                const mainGame = game.storage.maingame;
+                mainGame.sceneArguments = sceneArguments;
 
                 const scene = new THREE.Scene();
 
@@ -1188,7 +1092,7 @@
 
                 const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 100);
 
-                game.storage.maingame.controls = new PointerLockControls(camera, game.renderer.domElement);
+                mainGame.controls = new PointerLockControls(camera, game.renderer.domElement);
                 const composer = game.createComposer(scene, camera);
                 const ssaoPass = new SSAOPass(scene, camera, game.renderer.domElement.clientWidth, game.renderer.domElement.clientHeight);
                 ssaoPass.kernelRadius = 6;
@@ -1213,20 +1117,16 @@
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(-3.1, 0, -2.85).setRotation(0, Math.PI/2, 0).getObject());
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(2.7, 0, 5.8).setRotation(0, Math.PI, 0).getObject());
 
-                game.storage.maingame.effects.dust?.dispose?.();
-
-                const dustSettings = LocationDustParticleSystem.createLocationDustSettings(game.storage.maingame.dustSettings);
-
-                if (dustSettings.enabled) {
-                    game.storage.maingame.effects.dust = new LocationDustParticleSystem(game.renderer, dustSettings);
-                    scene.add(game.storage.maingame.effects.dust.object);
-                    game.debug.registerArea(
-                        game.storage.maingame.effects.dust.object,
-                        () => game.storage.maingame.effects.dust?.settings?.area
-                    );
-                } else {
-                    game.storage.maingame.effects.dust = undefined;
-                }
+                mainGame.dust?.dispose?.();
+                mainGame.dust = new LocationDustParticleSystem(
+                    game.renderer,
+                    LocationDustParticleSystem.createLocationDustSettings(mainGame.dustSettings)
+                );
+                scene.add(mainGame.dust.object);
+                game.debug.registerArea(
+                    mainGame.dust.object,
+                    () => mainGame.dust?.settings?.area
+                );
 
                 const light = new THREE.PointLight( 0xffffff, 5, 35 );
                 light.position.set( 0, 0.5, 0 );
@@ -1247,27 +1147,27 @@
                 
                 const keydown = (game, event) => {
                     switch (event.code) {
-                        case 'KeyW': game.storage.maingame.input.forward = true; event.preventDefault(); break;
-                        case 'KeyS': game.storage.maingame.input.backward = true; event.preventDefault(); break;
-                        case 'KeyA': game.storage.maingame.input.left = true; event.preventDefault(); break;
-                        case 'KeyD': game.storage.maingame.input.right = true; event.preventDefault(); break;
+                        case 'KeyW': mainGame.input.forward = true; event.preventDefault(); break;
+                        case 'KeyS': mainGame.input.backward = true; event.preventDefault(); break;
+                        case 'KeyA': mainGame.input.left = true; event.preventDefault(); break;
+                        case 'KeyD': mainGame.input.right = true; event.preventDefault(); break;
                         default: break;
                     }
                 };
 
                 const keyup = (game, event) => {
                     switch (event.code) {
-                        case 'KeyW': game.storage.maingame.input.forward = false; event.preventDefault(); break;
-                        case 'KeyS': game.storage.maingame.input.backward = false; event.preventDefault(); break;
-                        case 'KeyA': game.storage.maingame.input.left = false; event.preventDefault(); break;
-                        case 'KeyD': game.storage.maingame.input.right = false; event.preventDefault(); break;
-                        case 'Escape': game.storage.maingame.controls.lock(); event.preventDefault(); break;
+                        case 'KeyW': mainGame.input.forward = false; event.preventDefault(); break;
+                        case 'KeyS': mainGame.input.backward = false; event.preventDefault(); break;
+                        case 'KeyA': mainGame.input.left = false; event.preventDefault(); break;
+                        case 'KeyD': mainGame.input.right = false; event.preventDefault(); break;
+                        case 'Escape': mainGame.controls.lock(); event.preventDefault(); break;
                         default: break;
                     }
                 };
 
                 const update = /** @param {DobrodzeyEngine} game */ (game, delta) => {
-                    game.storage.maingame.effects.dust?.update(delta);
+                    mainGame.dust?.update(delta);
                 };
 
                 const physicsUpdate = (game, delta) => {
@@ -1283,17 +1183,17 @@
                         .multiplyScalar(moveSpeed);
 
                     const direction = new THREE.Vector3();
-                    if (game.storage.maingame.input.forward) {
+                    if (mainGame.input.forward) {
                         direction.add(forward);
                     }
-                    if (game.storage.maingame.input.backward) {
+                    if (mainGame.input.backward) {
                         direction.sub(forward);
                     }
-                    if (game.storage.maingame.input.right) {
+                    if (mainGame.input.right) {
                         direction.add(right);
 
                     }
-                    if (game.storage.maingame.input.left) {
+                    if (mainGame.input.left) {
                         direction.sub(right);
                     }
 
@@ -1318,7 +1218,7 @@
                 const resize = (game) => {
                     game.cameraResize();
                     game.renderResize();
-                    game.storage.maingame.effects.dust?.resize();
+                    mainGame.dust?.resize();
                 };
 
                 return {
@@ -1330,7 +1230,15 @@
                     physicsUpdate,
                     keyup,
                     keydown,
-                    resize
+                    resize,
+                    destroy: () => {
+                        mainGame.dust?.dispose?.();
+                        mainGame.dust = undefined;
+
+                        mainGame.controls?.unlock?.();
+                        mainGame.controls?.disconnect?.();
+                        mainGame.controls = undefined;
+                    }
                 };
 
             });
