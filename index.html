@@ -97,7 +97,18 @@
         import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
         import RAPIER from 'rapier';
 
-        const BASEURL = "https://raw.githubusercontent.com/DeGuisante/noiwontwork.github.io/refs/heads/master/data/";
+        const LOCAL_DATA_ROOT = "./data/";
+        const REMOTE_DATA_ROOT = "https://raw.githubusercontent.com/DeGuisante/noiwontwork.github.io/refs/heads/master/data/";
+        const IS_LOCAL_DEV_SERVER = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+        const DATA_ROOT = IS_LOCAL_DEV_SERVER ? LOCAL_DATA_ROOT : REMOTE_DATA_ROOT;
+        const getDataUrl = (path = "") => `${DATA_ROOT}${path}`;
+
+        if (IS_LOCAL_DEV_SERVER) {
+            const liveReload = new EventSource('/__reload');
+            liveReload.addEventListener('reload', () => {
+                window.location.reload();
+            });
+        }
 
         class ThreeObjectBuilder {
             #object
@@ -115,8 +126,18 @@
                 return this;
             }
 
+            setPositionVector(vector) {
+                this.#object.position.copy(vector);
+                return this;
+            }
+
             setRotation(x, y, z, order = 'XYZ') {
                 this.#object.rotation.set(x, y, z, order);
+                return this;
+            }
+
+            setRotationEuler(euler) {
+                this.#object.rotation.copy(euler);
                 return this;
             }
 
@@ -125,13 +146,28 @@
                 return this;
             }
 
+            setScaleVector(vector) {
+                this.#object.scale.copy(vector);
+                return this;
+            }
+
             setQuaternion(x, y, z, w) {
                 this.#object.quaternion.set(x, y, z, w);
                 return this;
             }
 
+            setQuaternionValue(quaternion) {
+                this.#object.quaternion.copy(quaternion);
+                return this;
+            }
+
             lookAt(x, y, z) {
                 this.#object.lookAt(x, y, z);
+                return this;
+            }
+
+            lookAtVector(vector) {
+                this.#object.lookAt(vector);
                 return this;
             }
 
@@ -158,6 +194,132 @@
 
             getObject() {
                 return this.#object;
+            }
+        }
+
+        class ImportedSceneBuilder {
+            #engine
+            #scene
+            #markers
+            #colliderDefinitions
+            #colliders
+            #objectBuilder
+
+            constructor(engine, asset) {
+                this.#engine = engine;
+                this.#scene = asset.scene.clone(true);
+                this.#markers = engine.collectMarkers(this.#scene);
+                this.#colliderDefinitions = [];
+                this.#colliders = [];
+                this.#objectBuilder = new ThreeObjectBuilder(this.#scene);
+            }
+
+            setPosition(x, y, z) {
+                this.#objectBuilder.setPosition(x, y, z);
+                return this;
+            }
+
+            setPositionVector(vector) {
+                this.#objectBuilder.setPositionVector(vector);
+                return this;
+            }
+
+            setRotation(x, y, z, order = 'XYZ') {
+                this.#objectBuilder.setRotation(x, y, z, order);
+                return this;
+            }
+
+            setRotationEuler(euler) {
+                this.#objectBuilder.setRotationEuler(euler);
+                return this;
+            }
+
+            setScale(x, y, z = x) {
+                this.#objectBuilder.setScale(x, y, z);
+                return this;
+            }
+
+            setScaleVector(vector) {
+                this.#objectBuilder.setScaleVector(vector);
+                return this;
+            }
+
+            setQuaternion(x, y, z, w) {
+                this.#objectBuilder.setQuaternion(x, y, z, w);
+                return this;
+            }
+
+            setQuaternionValue(quaternion) {
+                this.#objectBuilder.setQuaternionValue(quaternion);
+                return this;
+            }
+
+            lookAt(x, y, z) {
+                this.#objectBuilder.lookAt(x, y, z);
+                return this;
+            }
+
+            lookAtVector(vector) {
+                this.#objectBuilder.lookAtVector(vector);
+                return this;
+            }
+
+            setName(name) {
+                this.#objectBuilder.setName(name);
+                return this;
+            }
+
+            setVisible(visible) {
+                this.#objectBuilder.setVisible(visible);
+                return this;
+            }
+
+            setShadow(shadowSettings) {
+                this.#objectBuilder.setShadow(shadowSettings);
+                return this;
+            }
+
+            applyMarkerExtraData(extraData) {
+                this.#engine.applyMarkerExtraData(this.#markers, extraData);
+                return this;
+            }
+
+            createFixedColliders(flags = undefined) {
+                if (this.#colliderDefinitions.length > 0) {
+                    return this;
+                }
+
+                this.#colliderDefinitions = this.#engine.createFixedColliderDefinitionsFromObject(this.#scene, flags);
+                return this;
+            }
+
+            createAndAddFixedColliders(physicsWorld, flags = undefined) {
+                this.createFixedColliders(flags);
+
+                if (this.#colliders.length > 0) {
+                    return this;
+                }
+
+                this.#colliders = this.#engine.addFixedColliderDefinitionsToWorld(physicsWorld, this.#colliderDefinitions);
+                return this;
+            }
+
+            addTo(parent) {
+                this.#objectBuilder.addTo(parent);
+                return this;
+            }
+
+            getScene() {
+                return this.#scene;
+            }
+
+            build() {
+                return {
+                    scene: this.#scene,
+                    markers: this.#markers,
+                    colliderDefinitions: this.#colliderDefinitions,
+                    colliders: this.#colliders
+                };
             }
         }
 
@@ -957,8 +1119,8 @@
                 physcisWorld.createCollider(colliderDesc, body);
             }
 
-            createFixedCollidersFromObject(physicsWorld, object, flags = undefined) {
-                const colliders = [];
+            createFixedColliderDefinitionsFromObject(object, flags = undefined) {
+                const colliderDefinitions = [];
                 const colliderFlags = flags ?? RAPIER.TriMeshFlags.FIX_INTERNAL_EDGES ?? 0;
                 // матрица это position + scale + rotation типа, хз как работает, но надо это принять
                 // обновляет объект и всех потомков вниз
@@ -992,22 +1154,30 @@
                         // дрисло если нету индексов, то есть по порядку связать это дерьмо
                         : Uint32Array.from({ length: positionAttribute.count }, (_, index) => index);
 
-                    const bodyDesc = RAPIER.RigidBodyDesc.fixed();
-                    const colliderDesc = RAPIER.ColliderDesc.trimesh(vertices, indices, colliderFlags);
-                    const body = physicsWorld.createRigidBody(bodyDesc);
-                    colliders.push(physicsWorld.createCollider(colliderDesc, body));
+                    colliderDefinitions.push({
+                        bodyDesc: RAPIER.RigidBodyDesc.fixed(),
+                        colliderDesc: RAPIER.ColliderDesc.trimesh(vertices, indices, colliderFlags)
+                    });
 
                     geometry.dispose();
                 });
 
+                return colliderDefinitions;
+            }
+
+            addFixedColliderDefinitionsToWorld(physicsWorld, colliderDefinitions) {
+                const colliders = [];
+
+                for (const { bodyDesc, colliderDesc } of colliderDefinitions) {
+                    const body = physicsWorld.createRigidBody(bodyDesc);
+                    colliders.push(physicsWorld.createCollider(colliderDesc, body));
+                }
+
                 return colliders;
             }
 
-            instantiateImportedScene(asset, physicsWorld, flags = undefined) {
-                const scene = asset.scene.clone(true);
-                const colliders = this.createFixedCollidersFromObject(physicsWorld, scene, flags);
-                const markers = this.collectMarkers(scene);
-                return { scene, colliders, markers };
+            instantiateImportedScene(asset) {
+                return new ImportedSceneBuilder(this, asset);
             }
 
             createPlayerBody(physicsWorld, playerRadius, playerHeight, x, y, z) {
@@ -1050,11 +1220,10 @@
 
                 const loadingscreenBackground = document.querySelector("#loadingscreen-background");
                 const loadingscreenText = document.querySelector("#loadingscreen-text");
-
                 const fileLoader = new THREE.FileLoader();
                 fileLoader.setResponseType("json");
                 
-                fileLoader.load(BASEURL + "textdata.json", data => {
+                fileLoader.load(getDataUrl("textdata.json"), data => {
                     game.storage.assets = {};
                     game.storage.strings = {};
                     game.storage.markerExtraData = data.markerExtraData ?? {};
@@ -1076,16 +1245,16 @@
                         const assetdata = data.gameassets[key]
                         switch (assetdata.type) {
                             case 0: // TextureLoader
-                                new THREE.TextureLoader(manager).load(BASEURL + assetdata.path, data => { game.storage.assets[key] = data; });
+                                new THREE.TextureLoader(manager).load(getDataUrl(assetdata.path), data => { game.storage.assets[key] = data; });
                                 break;
                             case 1: // GLTFLoader
-                                new GLTFLoader(manager).load(BASEURL + assetdata.path, data => {
+                                new GLTFLoader(manager).load(getDataUrl(assetdata.path), data => {
                                     game.prepareImportedScene(data.scene);
                                     game.storage.assets[key] = data;
                                 });
                                 break;
                             case 2: // ImageLoader
-                                new THREE.ImageLoader(manager).load(BASEURL + assetdata.path, data => { game.storage.assets[key] = data; });
+                                new THREE.ImageLoader(manager).load(getDataUrl(assetdata.path), data => { game.storage.assets[key] = data; });
                                 break;
                         }
                     }
@@ -1096,6 +1265,9 @@
                             game.generateScene("maingame");
                         };
                     };
+                }, undefined, (error) => {
+                    console.error(error);
+                    loadingscreenText.textContent = 'Не удалось загрузить данные игры.';
                 });
 
                 return {};
@@ -1151,10 +1323,12 @@
 
                 // ==== ЛОКАЦИЯ
 
-                const locationImport = game.instantiateImportedScene(game.storage.assets.location, physicsWorld);
-                game.applyMarkerExtraData(locationImport.markers, game.storage.markerExtraData);
-
-                scene.add(locationImport.scene);
+                const locationImport = game
+                    .instantiateImportedScene(game.storage.assets.location)
+                    .applyMarkerExtraData(game.storage.markerExtraData)
+                    .createAndAddFixedColliders(physicsWorld)
+                    .addTo(scene)
+                    .build();
 
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(-3.1, 0, -2.85).setRotation(0, Math.PI/2, 0).getObject());
                 scene.add(new ThreeObjectBuilder(game.storage.assets.fridge.scene).clone().setPosition(2.7, 0, 5.8).setRotation(0, Math.PI, 0).getObject());
